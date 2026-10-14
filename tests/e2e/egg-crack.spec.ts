@@ -703,3 +703,85 @@ test.describe("소리·시각 효과 (STEP 7)", () => {
     expect(errors.filter((e) => !e.includes("THREE.Clock"))).toEqual([]);
   });
 });
+
+test.describe("병아리 계란 (깜짝 연출)", () => {
+  test("자동화 브라우저에서는 늘 보통 계란이다 (다른 테스트가 흔들리지 않게)", async ({ page }) => {
+    await page.goto("/");
+    await waitForScene(page);
+    const phase = await page.evaluate(() => (window.__cookChick as { getState: () => { phase: string } }).getState().phase);
+    expect(phase).toBe("none");
+  });
+
+  test("병아리가 든 계란을 벌리면 흰자·노른자 대신 병아리가 튀어나와 화면 밖으로 달아난다", async ({ page }) => {
+    await page.goto("/?chick=1");
+    await waitForScene(page);
+    const chick = () =>
+      page.evaluate(() => {
+        const phase = (window.__cookChick as { getState: () => { phase: string } }).getState().phase;
+        const o = (window.__cookScene as { getObjectByName: (n: string) => { visible: boolean; position: { toArray: () => number[] } } }).getObjectByName("chick");
+        return { phase, visible: o.visible, pos: o.position.toArray() };
+      });
+    expect((await chick()).phase).toBe("inEgg");
+
+    await grabEgg(page);
+    await smashOnRim(page);
+    const q = await eggPos(page);
+    const [qx, qy] = await screenAt(page, q[0], q[2]);
+    for (let i = 1; i <= 14 && (await shell(page)).state !== "OPENED"; i++) {
+      await page.mouse.move(qx + i * 7, qy, { steps: 2 });
+      await page.waitForTimeout(35);
+    }
+    expect((await shell(page)).state).toBe("OPENED");
+
+    // 튀어나와 보인다
+    await expect.poll(async () => (await chick()).phase).toBe("out");
+    await expect.poll(async () => (await chick()).visible).toBe(true);
+    // 화면 밖으로 사라진다: 마지막 위치는 화면 가장자리 너머
+    await expect.poll(async () => (await chick()).phase, { timeout: 5_000 }).toBe("gone");
+    const last = await chick();
+    expect(last.visible).toBe(false);
+    const ndc = await page.evaluate(() => {
+      const [sx, sy] = window.__cookProject!("chick", [0, 0.03, 0])!;
+      return [sx / window.innerWidth, sy / window.innerHeight];
+    });
+    expect(ndc[0] < 0 || ndc[0] > 1 || ndc[1] < 0 || ndc[1] > 1).toBe(true);
+
+    // 흰자·노른자는 쏟아지지 않았고 조리도 시작되지 않는다
+    expect((await contents(page)).state).toBe("IN_SHELL");
+    const heating = await page.evaluate(() => (window.__cookEggCooking as { getState: () => { heating: boolean } }).getState().heating);
+    expect(heating).toBe(false);
+  });
+  test("팬 벽 어디에서 달아나든 멈칫하지 않고 한 번에 팬을 뛰어넘는다", async ({ page }) => {
+    // 벽 위쪽(테두리 바로 아래)에서 출발하는 경우가 가장 까다롭다: 테두리 너머는 낮아서 바로 앞만 보면 막힌다
+    for (const [start, dir] of [
+      [0, 0],
+      [0.1, Math.PI / 2],
+      [0.12, 0],
+      [0.13, Math.PI],
+      [0.13, -Math.PI / 4],
+    ]) {
+      await page.goto("/?chick=1");
+      await waitForScene(page);
+      const outAt = await page.evaluate(async ([start, dir]) => {
+        const w = window as unknown as {
+          __cookScene: { getObjectByName: (n: string) => { position: { x: number; z: number; set: (x: number, y: number, z: number) => void } } };
+          __cookChick: { getState: () => { hatch: () => void; phase: string } };
+          __cookChickDir?: number;
+        };
+        w.__cookScene.getObjectByName("grab:egg").position.set(Math.cos(dir) * start, 0.035, -0.025 + Math.sin(dir) * start);
+        w.__cookChickDir = dir;
+        w.__cookChick.getState().hatch();
+        const chick = w.__cookScene.getObjectByName("chick");
+        const t0 = performance.now();
+        while (performance.now() - t0 < 3000) {
+          await new Promise((r) => requestAnimationFrame(r));
+          if (Math.hypot(chick.position.x, chick.position.z + 0.025) > 0.15) return performance.now() - t0;
+        }
+        return null;
+      }, [start, dir]);
+      // 내려앉아 두리번(0.35s) + 달려서 뛰어넘기. 벽에 막혀 멈칫하면 1초를 넘는다
+      expect(outAt, `start ${start}, dir ${dir}`).not.toBeNull();
+      expect(outAt!, `start ${start}, dir ${dir}`).toBeLessThan(1000);
+    }
+  });
+});

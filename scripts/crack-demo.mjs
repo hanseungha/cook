@@ -18,7 +18,8 @@ const context = await browser.newContext({
   recordVideo: process.env.VIDEO ? { dir: out, size: { width: 1280, height: 800 } } : undefined,
 });
 const page = await context.newPage();
-await page.goto(base);
+// CHICK=1: 병아리가 든 계란 (벌린 뒤 달아나는 모습을 연속 촬영하고 끝)
+await page.goto(process.env.CHICK ? `${base}/?chick=1` : base);
 await page.waitForFunction(
   () => (window.__cook?.sceneReadyFrames ?? 0) > 30 && !!window.__cookProject?.("grab:egg") && !!window.__cookEggShell,
   null,
@@ -125,6 +126,31 @@ for (let i = 1; i <= Number(process.env.OPENSTEPS ?? 14); i++) {
   if ((await state()) === "OPENED") break;
 }
 console.log("after drag:", await state());
+if (process.env.CHICK) {
+  // CHICKSLOW=0.1: 병아리만 느리게 (클로즈업 촬영)
+  if (process.env.CHICKSLOW) await page.evaluate((v) => { window.__cookChickSlow = v; }, Number(process.env.CHICKSLOW));
+  const t0 = Date.now();
+  for (let i = 0; i < Number(process.env.CHICKFRAMES ?? 40); i++) {
+    const info = await page.evaluate(() => {
+      const c = window.__cookScene.getObjectByName("chick");
+      return { phase: window.__cookChick.getState().phase, visible: c.visible, pos: c.position.toArray().map((v) => +v.toFixed(3)) };
+    });
+    console.log(Date.now() - t0, JSON.stringify(info));
+    if (!process.env.NOSHOT && i % 2 === 0) {
+      await page.screenshot({ path: `${out}/chick-${String(i).padStart(2, "0")}.png` });
+      if (info.visible) {
+        const c = await page.evaluate(() => window.__cookProject("chick", [0, 0.03, 0]));
+        await page.screenshot({ path: `${out}/chick-${String(i).padStart(2, "0")}-zoom.png`, clip: { x: Math.max(0, c[0] - 100), y: Math.max(0, c[1] - 100), width: 200, height: 160 } });
+      }
+    }
+    if (info.phase === "gone") break;
+    await page.waitForTimeout(60);
+  }
+  const ft = await page.evaluate(() => window.__ft.slice(-150));
+  console.log("max frame", Math.max(...ft).toFixed(1), "slow>20", ft.filter((x) => x > 20).length);
+  await browser.close();
+  process.exit(0);
+}
 // EARLYDROP=ms: 다 벌어진 뒤 ms 만에 놓는다 (흰자가 다 퍼지기 전에 껍데기가 팬에 떨어짐)
 if (process.env.EARLYDROP) {
   await page.waitForTimeout(Number(process.env.EARLYDROP));
@@ -150,6 +176,16 @@ if (process.env.SPILL) {
   // SPILLWAIT=ms: 그 자리에서 ms 동안 부은 뒤 옮긴다 (두 지점에 나눠 붓기)
   if (process.env.SPILLWAIT) await page.waitForTimeout(Number(process.env.SPILLWAIT));
   await carryTo(sx, sz, 12);
+  // REOPEN=1: 옮긴 자리에서 마저 다 벌린다 (조금 벌려 흰자만 흘린 뒤 다른 곳에 노른자를 떨어뜨리기)
+  if (process.env.REOPEN) {
+    const r = await eggPos();
+    const [rx, ry] = await at(r[0], r[2]);
+    for (let i = 1; i <= 20 && (await state()) !== "OPENED"; i++) {
+      await page.mouse.move(rx + i * 7, ry, { steps: 2 });
+      await page.waitForTimeout(35);
+    }
+    console.log("reopen:", await state());
+  }
 }
 if (process.env.TRACE) {
   await page.waitForTimeout(Number(process.env.TRACE_MS ?? 600));

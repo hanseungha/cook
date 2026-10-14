@@ -123,6 +123,36 @@ export function playSplat(volume: number, hot: number, name = "splat") {
   }
 }
 
+/**
+ * 작은 새가 "삐약" 우는 소리: 높은 음(약 4kHz)에서 빠르게 내려오는 짧은 휘파람 + 약한 배음.
+ * excited 0 ~ 1: 클수록 높고 짧고 급하게 (달아나며 우는 소리)
+ */
+export function playPeep(excited = 0.5) {
+  const k = Math.min(1, Math.max(0, excited));
+  const seconds = 0.09 + 0.07 * (1 - k) + rand() * 0.03;
+  const f0 = 4300 + 600 * k + rand() * 400;
+  const f1 = f0 * (0.62 + rand() * 0.1);
+  play(
+    "peep",
+    seconds + 0.01,
+    (d, sr) => {
+      const n = Math.floor(seconds * sr);
+      let phase = 0;
+      for (let i = 0; i < n; i++) {
+        const t = i / n;
+        // 처음에 살짝 올라갔다가 길게 내려온다 + 떨림
+        const f = f0 * (1 + 0.08 * Math.sin(Math.PI * Math.min(1, t * 4))) + (f1 - f0) * t * t + 120 * Math.sin(i * 0.004);
+        phase += (2 * Math.PI * f) / sr;
+        const env = Math.min(1, t * 14) * Math.pow(1 - t, 1.6);
+        d[i] = (Math.sin(phase) + 0.18 * Math.sin(2 * phase + 0.4) + 0.05 * (rand() * 2 - 1)) * env;
+      }
+      lowpass(d, sr, 7000);
+    },
+    0.32,
+    { excited: k },
+  );
+}
+
 type Bank = { sizzle: AudioBuffer[]; hiss: AudioBuffer[] };
 let bank: Bank | null = null;
 let bankLoading = false;

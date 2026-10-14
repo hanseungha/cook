@@ -22,6 +22,9 @@ import { useEggCookingStore } from "./eggCookingStore";
 import { useCookingClock } from "@/engine/cooking/cookingProgress";
 import { EggSounds, eggSoundCues } from "./EggSounds";
 import { PAN_ORIGIN } from "@/kitchen/StoveSetup";
+import { RunawayChick } from "@/creatures/chick/RunawayChick";
+import { playPeep } from "@/engine/audio/proceduralSounds";
+import { useChickStore } from "./chickStore";
 
 const ID = "egg";
 /** 테두리에 가까워지면 옆면이 테두리를 향하도록 계란을 돌리는 범위 (m) */
@@ -42,6 +45,19 @@ const POUR_GATE = {
 };
 const dragPoint = new THREE.Vector3();
 const FULL: EggFill = { white: 1, yolk: true };
+const EMPTY: EggFill = { white: 0, yolk: false };
+const PAN_CENTER: [number, number] = [PAN_ORIGIN[0], PAN_ORIGIN[2]];
+const onChickGone = () => useChickStore.getState().leave();
+
+/**
+ * 이 계란에 병아리가 들었는지: 주소에 ?chick=1 / ?chick=0 이 있으면 그대로,
+ * 자동화 브라우저(테스트·데모 스크립트)에서는 결과가 흔들리지 않게 보통 계란, 그 밖에는 확률
+ */
+function chickOverride() {
+  const q = new URLSearchParams(window.location.search).get("chick");
+  if (q !== null) return q !== "0";
+  return navigator.webdriver ? false : undefined;
+}
 
 /** 팬 속 흰자·노른자 윗면 (EggContents가 채운다) */
 const contentsSurface: { topAt: ((x: number, z: number) => number | null) | null } = { topAt: null };
@@ -63,6 +79,8 @@ declare global {
     __cookEggContents?: unknown;
     /** 개발 모드 전용: 조리 진행도 스토어 */
     __cookEggCooking?: unknown;
+    /** 개발 모드 전용: 병아리 스토어 */
+    __cookChick?: unknown;
   }
 }
 
@@ -83,6 +101,7 @@ export function CrackableEgg({
   const impactU = useEggShellStore((s) => s.impactU);
   const discarded = useEggShellStore((s) => s.discarded);
   const pouring = useEggContentsStore((s) => s.state !== "IN_SHELL");
+  const chickOut = useChickStore((s) => s.phase === "out");
   const lastSource = useRef(new THREE.Vector3());
   const yawGroup = useRef<THREE.Group>(null);
   const shellRef = useRef<THREE.Group>(null);
@@ -93,7 +112,9 @@ export function CrackableEgg({
     window.__cookEggShell = useEggShellStore;
     window.__cookEggContents = useEggContentsStore;
     window.__cookEggCooking = useEggCookingStore;
+    window.__cookChick = useChickStore;
     return () => {
+      delete window.__cookChick;
       delete window.__cookEggShell;
       delete window.__cookEggContents;
       delete window.__cookEggCooking;
@@ -115,12 +136,19 @@ export function CrackableEgg({
   }, []);
 
 
+  // 계란마다 처음에 한 번: 병아리가 들었나
+  useEffect(() => useChickStore.getState().roll(chickOverride()), []);
+
   // 껍데기가 벌어지기 시작하면(틈이 생기면) 바로 흰자가 흘러나오기 시작한다.
-  // 틈이 좁을 때는 천천히, 다 벌어지면 왈칵. 노른자는 틈이 충분히 벌어져야 빠져나온다
+  // 틈이 좁을 때는 천천히, 다 벌어지면 왈칵. 노른자는 틈이 충분히 벌어져야 빠져나온다.
+  // 병아리가 든 계란은 흰자·노른자 대신 병아리가 튀어나온다
   useEffect(
     () =>
       useEggShellStore.subscribe((s) => {
-        if (s.open >= POUR_GATE.start || s.state === "OPENED") useEggContentsStore.getState().pour();
+        if (s.open < POUR_GATE.start && s.state !== "OPENED") return;
+        const chick = useChickStore.getState();
+        if (chick.phase === "none") useEggContentsStore.getState().pour();
+        else chick.hatch();
       }),
     [],
   );
@@ -133,6 +161,7 @@ export function CrackableEgg({
   }, []);
   // 껍데기 속에 남은 내용물 (벌어진 틈으로 보인다)
   const fill = useCallback((): EggFill => {
+    if (useChickStore.getState().phase !== "none") return EMPTY;
     const c = useEggContentsStore.getState();
     if (c.state === "IN_SHELL") return FULL;
     return { white: 1 - c.white, yolk: c.yolk === "inShell" };
@@ -234,6 +263,14 @@ export function CrackableEgg({
         onLand={eggSoundCues.land}
       />
       <EggSounds />
+      <RunawayChick
+        active={chickOut}
+        source={source}
+        center={PAN_CENTER}
+        groundAt={supportHeightAt}
+        onPeep={playPeep}
+        onGone={onChickGone}
+      />
       <Grabbable
         id={ID}
         initial={initial}
