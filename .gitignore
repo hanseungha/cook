@@ -39,3 +39,13 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# playwright
+/test-results/
+/playwright-report/
+/playwright/.cache/
+
+# 스크립트가 생성하는 캡처/측정 결과물 (scripts/로 재생성 가능)
+/docs/
+/crack-demo/
+/audit/
