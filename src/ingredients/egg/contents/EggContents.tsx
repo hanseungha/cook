@@ -21,7 +21,16 @@ export const CONTENTS = {
   whiteVolume: 3.3e-5,
   /** 노른자 반지름 (m) ≈ 지름 31mm */
   yolkRadius: 0.0155,
+  /**
+   * 노른자를 감싸고 함께 떨어지는 농후 흰자의 비율. 노른자는 흰자와 따로 떨어지지 않는다:
+   * 계란을 옮기며 부어 노른자가 맨 팬에 떨어져도 그 둘레에 흰자가 고인다
+   */
+  yolkWhite: 0.25,
+  /** 노른자에 딸린 흰자가 착지한 뒤 다 퍼져 나오는 시간 (초) */
+  yolkWhiteSpread: 0.35,
 };
+/** 노른자와 따로 흘러내리는 묽은 흰자 부피 */
+const FREE_WHITE = CONTENTS.whiteVolume * (1 - CONTENTS.yolkWhite);
 
 /** 쏟아지는 순서와 속도 */
 const POUR = {
@@ -91,6 +100,8 @@ type Pour = {
     settledFor: number;
   };
   reported: boolean;
+  /** 노른자에 딸려 아직 팬에 내려놓지 않은 흰자 부피 (m³) */
+  carried: number;
   /** 노른자를 둘러싼 농후 흰자(볼록한 층). 노른자가 떨어진 자리에서 자라난다 */
   mound: Mound;
   /** 흰자 위치별 익힘 + 격자 칸마다 받는 열 세기 */
@@ -288,7 +299,8 @@ export function EggContents({ active, source, groundAt, sideAt, onSettled, onPro
         warmup: 0,
         t: 0,
         field: null,
-        strand: new AlbumenStrand(CONTENTS.whiteVolume, POUR.whiteDuration),
+        strand: new AlbumenStrand(FREE_WHITE, POUR.whiteDuration),
+        carried: CONTENTS.whiteVolume * CONTENTS.yolkWhite,
         lastSource: start.clone(),
         sourceVel: new THREE.Vector3(),
         yolk: { phase: "inShell", pos: start.clone(), vel: new THREE.Vector3(), squash: 1, squashV: 0, settledFor: 0 },
@@ -454,6 +466,12 @@ export function EggContents({ active, source, groundAt, sideAt, onSettled, onPro
         Object.assign(mound, { x: y.pos.x, z: y.pos.z, amount: 0.001 });
       }
     } else {
+      // 노른자를 감싸고 함께 떨어진 농후 흰자가 노른자 밑에서 둘레로 퍼져 나온다
+      if (p.carried > 0) {
+        const v = Math.min(p.carried, (CONTENTS.whiteVolume * CONTENTS.yolkWhite * dt) / CONTENTS.yolkWhiteSpread);
+        field.deposit(y.pos.x, y.pos.z, v, R * 1.1);
+        p.carried -= v;
+      }
       // 비탈·모서리(팬 테두리, 유리 끝)에 걸치면 낮은 쪽으로 미끄러지거나 굴러떨어진다
       const here = field.groundAt(y.pos.x, y.pos.z);
       // 완만한 비탈(팬 안쪽 벽)에서 가장 낮은 쪽, 그리고 모서리(팬 테두리 바깥, 유리 끝) 방향을 따로 본다
@@ -531,13 +549,13 @@ export function EggContents({ active, source, groundAt, sideAt, onSettled, onPro
     }
 
     onProgress?.({
-      white: p.strand.emitted / CONTENTS.whiteVolume,
+      white: p.strand.emitted / FREE_WHITE,
       yolk: y.phase,
       area: field.coverage(),
       center: y.phase === "landed" ? [y.pos.x, y.pos.z] : [field.x0 + field.size / 2, field.z0 + field.size / 2],
       ...p.cook,
     });
-    if (!p.reported && p.strand.done && field.settled && y.phase === "landed" && y.settledFor > 0.3) {
+    if (!p.reported && p.strand.done && p.carried <= 0 && field.settled && y.phase === "landed" && y.settledFor > 0.3) {
       p.reported = true;
       onSettled?.();
     }
